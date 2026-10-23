@@ -1,0 +1,873 @@
+openapi: 3.0.3
+info:
+  title: Student API
+  description: |
+    API สำหรับจัดการข้อมูลนิสิต ผู้ใช้ และการลงทะเบียนเรียน พัฒนาในรายวิชา 88736065
+    เอกสารนี้เขียนจาก route ที่ทำงานอยู่จริงใน `app.js`
+
+    **การยืนยันตัวตน:** ใช้ JWT ส่งใน header `Authorization: Bearer <token>`
+    ขอ token ได้จาก `POST /api/v1/auth/login`
+
+    **Endpoint ที่ต้องยืนยันตัวตนในโค้ดปัจจุบัน**
+    - `GET /api/v1/auth/me` (ผู้ใช้ที่ล็อกอินแล้วทุก role)
+    - `GET /api/v1/students/{id}/enrichment` (ผู้ใช้ที่ล็อกอินแล้วทุก role)
+    - `DELETE /api/v1/students/{id}` (เฉพาะ role `admin`)
+
+    Endpoint อื่นทั้งหมดเปิดให้เรียกได้โดยไม่ต้องมี token
+
+    **รูปแบบ error มาตรฐาน:** `{ "error": { "code": "...", "message": "..." } }`
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+tags:
+  - name: General
+    description: ตรวจสอบสถานะระบบ
+  - name: Authentication
+    description: สมัครสมาชิก เข้าสู่ระบบ และดูข้อมูลตนเอง
+  - name: Students
+    description: จัดการข้อมูลนิสิต (API v1)
+  - name: Enrollments
+    description: ลงทะเบียนเรียน ยกเลิกการลงทะเบียน และดูรายวิชาของนิสิต
+  - name: Version 2
+    description: API เวอร์ชัน 2 (รูปแบบ response ต่างจาก v1)
+
+paths:
+  /:
+    get:
+      tags: [General]
+      operationId: healthCheck
+      summary: ตรวจสอบว่า API พร้อมใช้งาน
+      responses:
+        '200':
+          description: API พร้อมใช้งาน
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Student API พร้อมใช้งาน
+
+  /api/v1/auth/register:
+    post:
+      tags: [Authentication]
+      operationId: register
+      summary: สมัครสมาชิก
+      description: สร้างผู้ใช้ใหม่ โดยกำหนด role เป็น `student` เสมอ (ไม่สามารถเลือก role เองได้)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '201':
+          description: สมัครสมาชิกสำเร็จ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สมัครสมาชิกสำเร็จ
+                  data:
+                    $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: อีเมลนี้มีอยู่ในระบบแล้ว
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: DUPLICATE_EMAIL
+                  message: อีเมลนี้มีอยู่ในระบบแล้ว
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: เข้าสู่ระบบและรับ JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '200':
+          description: เข้าสู่ระบบสำเร็จ ได้รับ JWT (อายุตามค่า `JWT_EXPIRES_IN`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: เข้าสู่ระบบสำเร็จ
+                  token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MX0.signature
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: อีเมลหรือรหัสผ่านไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: อีเมลหรือรหัสผ่านไม่ถูกต้อง
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/auth/me:
+    get:
+      tags: [Authentication]
+      operationId: getMe
+      summary: ดูข้อมูลผู้ใช้ที่เข้าสู่ระบบ
+      description: คืนข้อมูลที่อยู่ใน payload ของ JWT (`id`, `email`, `role` พร้อม `iat`, `exp`)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: ข้อมูลผู้ใช้จาก JWT
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: สำเร็จ
+                  data:
+                    $ref: '#/components/schemas/TokenPayload'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/students:
+    get:
+      tags: [Students]
+      operationId: listStudents
+      summary: แสดงรายชื่อนิสิต
+      description: |
+        รองรับการแบ่งหน้า (pagination) กรองตามสาขา และเรียงลำดับตามฟิลด์ที่อนุญาต
+        (`id`, `name`, `major`, `created_at`) ค่า `sort` ที่ไม่อยู่ในรายการจะถูกแทนด้วย `id`
+        ส่วนค่า `page` / `limit` ที่ไม่ถูกต้องจะถูกแทนด้วยค่าเริ่มต้น (1 และ 10) โดยไม่ตอบ error
+
+        **พฤติกรรม Caching (ตามโค้ดปัจจุบัน):** endpoint นี้ **ไม่ได้อ่านข้อมูลจาก Redis cache**
+        ทุกคำขอ query จาก MySQL โดยตรง ผลลัพธ์จึงขึ้นกับ `page`, `limit`, `major`, `sort`, `order`
+        เสมอ และ response **ไม่มี header แจ้งสถานะ cache hit/miss** (เช่น `X-Cache`)
+        ฝั่ง Redis มีเพียงการลบ key `students:all` ทิ้งเมื่อมีการเพิ่ม (`POST /api/v1/students`)
+        หรือลบ (`DELETE /api/v1/students/{id}`) นิสิต เพื่อป้องกัน cache เก่าค้างหากนำ cache กลับมาใช้
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Major'
+        - $ref: '#/components/parameters/Sort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: รายชื่อนิสิตพร้อมข้อมูล pagination
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Students]
+      operationId: createStudent
+      summary: เพิ่มข้อมูลนิสิต
+      description: |
+        เพิ่มนิสิตใหม่ (ไม่ต้องยืนยันตัวตนในโค้ดปัจจุบัน) และลบ cache key `students:all` ใน Redis
+
+        **Validation (สัปดาห์ที่ 12, Zod):** `name` 2-100 ตัวอักษร, `major` 1-100 ตัวอักษร, `email` รูปแบบอีเมล
+        และ conditional validation: ถ้า `major` ขึ้นต้นด้วย `International` ต้องมี `passportNumber`
+        ไม่เช่นนั้นตอบ `400` พร้อม `error.details` ระบุฟิลด์ที่มีปัญหา
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentInput'
+      responses:
+        '201':
+          description: สร้างข้อมูลสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: อีเมลนี้มีอยู่ในระบบแล้ว
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: DUPLICATE_EMAIL
+                  message: อีเมลนี้มีอยู่ในระบบแล้ว
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/students/{id}:
+    parameters:
+      - $ref: '#/components/parameters/StudentId'
+    get:
+      tags: [Students]
+      operationId: getStudent
+      summary: ดูข้อมูลนิสิตตามรหัส
+      responses:
+        '200':
+          description: พบข้อมูลนิสิต
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentResponse'
+        '404':
+          $ref: '#/components/responses/StudentNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Students]
+      operationId: deleteStudent
+      summary: ลบข้อมูลนิสิต (เฉพาะ admin)
+      description: ต้องแนบ JWT ของผู้ใช้ที่มี role `admin` และลบ cache key `students:all` ใน Redis เมื่อสำเร็จ
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: ลบข้อมูลสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: ผู้ใช้ไม่มีสิทธิ์ (role ไม่ใช่ `admin`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: คุณไม่มีสิทธิ์เข้าถึงทรัพยากรนี้
+        '404':
+          $ref: '#/components/responses/StudentNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/students/{id}/enrollments:
+    post:
+      tags: [Enrollments]
+      operationId: enrollStudent
+      summary: ลงทะเบียนนิสิตในรายวิชา (ใช้ transaction)
+      description: |
+        ล็อกแถวรายวิชาด้วย `SELECT ... FOR UPDATE` ตรวจที่นั่งว่าง บันทึกการลงทะเบียน
+        และลด `seat_available` ลง 1 ภายใน transaction เดียวกัน
+
+        หากไม่มีนิสิตตามรหัสที่ระบุ ฐานข้อมูลจะปฏิเสธด้วย foreign key และ API ตอบ `500`
+        (ไม่มีการตรวจเป็น `404` ในโค้ดปัจจุบัน)
+      parameters:
+        - $ref: '#/components/parameters/StudentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentInput'
+      responses:
+        '201':
+          description: ลงทะเบียนสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '404':
+          description: ไม่พบรายวิชาที่ระบุ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: COURSE_NOT_FOUND
+                  message: ไม่พบรายวิชาที่ระบุ
+        '409':
+          description: ที่นั่งเต็ม หรือนิสิตลงทะเบียนรายวิชานี้แล้ว
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                seatFull:
+                  summary: ที่นั่งเต็ม
+                  value:
+                    error:
+                      code: SEAT_FULL
+                      message: ที่นั่งเต็มแล้ว
+                alreadyEnrolled:
+                  summary: ลงทะเบียนซ้ำ
+                  value:
+                    error:
+                      code: ALREADY_ENROLLED
+                      message: นิสิตลงทะเบียนรายวิชานี้ไปแล้ว
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/students/{id}/enrollments-unsafe:
+    post:
+      tags: [Enrollments]
+      operationId: enrollStudentUnsafe
+      summary: ลงทะเบียนแบบไม่ใช้ transaction (สำหรับทดลองเท่านั้น)
+      description: |
+        Endpoint สำหรับเปรียบเทียบผลเมื่อ **ไม่มี** transaction และไม่ตรวจที่นั่งว่าง
+        จึงอาจทำให้ `seat_available` ติดลบเมื่อมีคำขอพร้อมกัน ห้ามใช้ใน production
+      parameters:
+        - $ref: '#/components/parameters/StudentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentInput'
+      responses:
+        '201':
+          description: ลงทะเบียนสำเร็จ (unsafe)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '409':
+          description: นิสิตลงทะเบียนรายวิชานี้แล้ว
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: ALREADY_ENROLLED
+                  message: นิสิตลงทะเบียนรายวิชานี้ไปแล้ว
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/students/{id}/enrollments/{courseId}:
+    delete:
+      tags: [Enrollments]
+      operationId: unenrollStudent
+      summary: ยกเลิกการลงทะเบียนและคืนที่นั่ง
+      description: ลบการลงทะเบียนและเพิ่ม `seat_available` ของรายวิชาขึ้น 1 ภายใน transaction เดียวกัน
+      parameters:
+        - $ref: '#/components/parameters/StudentId'
+        - $ref: '#/components/parameters/CourseId'
+      responses:
+        '200':
+          description: ยกเลิกการลงทะเบียนสำเร็จ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '404':
+          description: ไม่พบการลงทะเบียน
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: ENROLLMENT_NOT_FOUND
+                  message: ไม่พบการลงทะเบียน
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/students/{id}/courses:
+    get:
+      tags: [Enrollments]
+      operationId: listStudentCourses
+      summary: ดูรายวิชาที่นิสิตลงทะเบียน
+      description: ใช้ JOIN ระหว่าง `courses` และ `enrollments` หากไม่พบนิสิตหรือยังไม่ได้ลงทะเบียนจะคืน `data` เป็น array ว่าง (ไม่ตอบ 404)
+      parameters:
+        - $ref: '#/components/parameters/StudentId'
+      responses:
+        '200':
+          description: รายวิชาที่ลงทะเบียน
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/students/{id}/enrichment:
+    get:
+      tags: [Students]
+      operationId: getStudentEnrichment
+      summary: ดึงข้อมูลเสริมของนิสิตจาก Public API ภายนอก
+      description: |
+        ดึงข้อมูลเสริมจาก JSONPlaceholder (`/todos/{id}`) มาประกอบการตอบกลับ ต้องแนบ JWT
+
+        **ความทนทาน (Resilience):**
+        - **Timeout** 3 วินาทีต่อคำขอ
+        - **Retry** สูงสุด 2 ครั้ง (ส่งคำขอรวม 3 ครั้ง) แบบ exponential backoff พร้อม jitter
+          (ครั้งที่ 1 รอ 0.5-1 วินาที, ครั้งที่ 2 รอ 1-2 วินาที) เฉพาะกรณีที่ควร retry ได้แก่
+          network error, timeout, `429` และ `5xx` ส่วน `4xx` อื่น ๆ ไม่ retry
+        - **Fallback** เมื่อบริการภายนอกล้มเหลวจนครบโควตา ระบบยังตอบ `200` พร้อม `source: fallback`
+          ผู้เรียกจึงต้องดูที่ `enrichment.source` / `enrichment.available` ไม่ใช่ status code
+
+        endpoint นี้ **ไม่ตรวจว่ามีนิสิตรหัสนี้อยู่ในฐานข้อมูลหรือไม่** (ไม่ตอบ 404)
+        และเมื่อเรียกขณะบริการภายนอกล้มเหลวจะใช้เวลานานได้ถึงประมาณ 12 วินาที
+        (3 คำขอ x timeout 3 วินาที + backoff)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/StudentId'
+      responses:
+        '200':
+          description: ข้อมูลเสริมจากบริการภายนอก หรือค่า fallback เมื่อบริการภายนอกล้มเหลว
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrichmentResponse'
+              examples:
+                external:
+                  summary: ดึงจากบริการภายนอกสำเร็จ
+                  value:
+                    data:
+                      studentId: "1"
+                      enrichment:
+                        source: external
+                        available: true
+                        note: delectus aut autem
+                fallback:
+                  summary: บริการภายนอกล้มเหลว ใช้ fallback
+                  value:
+                    data:
+                      studentId: "1"
+                      enrichment:
+                        source: fallback
+                        available: false
+                        note: ไม่สามารถดึงข้อมูลเสริมจากบริการภายนอกได้ในขณะนี้ กรุณาลองใหม่ภายหลัง
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/students:
+    get:
+      tags: [Version 2]
+      operationId: listStudentsV2
+      summary: แสดงรายชื่อนิสิตทั้งหมดในรูปแบบ API v2
+      description: ไม่มี pagination / filter / sort คืนนิสิตทั้งหมดในรูป `items` และ `count`
+      responses:
+        '200':
+          description: รายชื่อนิสิตพร้อมจำนวนรายการ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2StudentListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT จาก `POST /api/v1/auth/login` ส่งในรูป `Authorization Bearer <token>`
+
+  parameters:
+    StudentId:
+      name: id
+      in: path
+      required: true
+      description: รหัสนิสิต (`students.id`)
+      schema:
+        type: integer
+        minimum: 1
+      example: 1
+    CourseId:
+      name: courseId
+      in: path
+      required: true
+      description: รหัสรายวิชา (`courses.id`)
+      schema:
+        type: integer
+        minimum: 1
+      example: 1
+    Page:
+      name: page
+      in: query
+      required: false
+      description: หมายเลขหน้า (เริ่มที่ 1)
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      example: 1
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: จำนวนรายการต่อหน้า (สูงสุด 100)
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+      example: 10
+    Major:
+      name: major
+      in: query
+      required: false
+      description: กรองตามสาขาวิชา (ตรงกันทั้งข้อความ)
+      schema:
+        type: string
+      example: วิทยาการคอมพิวเตอร์
+    Sort:
+      name: sort
+      in: query
+      required: false
+      description: ฟิลด์ที่ใช้เรียงลำดับ
+      schema:
+        type: string
+        enum: [id, name, major, created_at]
+        default: id
+      example: name
+    Order:
+      name: order
+      in: query
+      required: false
+      description: ทิศทางการเรียง (ค่าอื่นนอกจาก `desc` จะถือเป็น `asc`)
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: asc
+      example: asc
+
+  responses:
+    TooManyRequests:
+      description: |
+        เกินโควตา rate limit (สัปดาห์ที่ 12) — `/api/v1/auth/login` จำกัด 5 ครั้ง / 15 นาที ต่อ IP,
+        endpoint อื่นจำกัด 100 ครั้ง / 1 นาที ต่อ IP response มี header `RateLimit` และ `RateLimit-Policy` (IETF draft-7)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: TOO_MANY_REQUESTS
+              message: พยายามเข้าสู่ระบบเกินจำนวนที่กำหนด กรุณาลองใหม่ภายหลัง
+    BadRequest:
+      description: |
+        ข้อมูลที่ส่งมาไม่ถูกต้อง มี 2 กรณี
+        1. ไม่ระบุฟิลด์ที่จำเป็น — `code` เป็น `VALIDATION_ERROR`
+        2. JSON ใน body มีรูปแบบผิด — status `400` เช่นกัน แต่ error handler กลางของระบบ
+           ตอบ `code` เป็น `INTERNAL_SERVER_ERROR` พร้อมข้อความจาก parser
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            missingFields:
+              summary: ไม่ระบุฟิลด์ที่จำเป็น
+              value:
+                error:
+                  code: VALIDATION_ERROR
+                  message: กรุณาระบุ email และ password
+            malformedJson:
+              summary: JSON ผิดรูปแบบ
+              value:
+                error:
+                  code: INTERNAL_SERVER_ERROR
+                  message: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    Unauthorized:
+      description: |
+        ไม่ได้แนบ token (`NO_TOKEN`) หรือ token ไม่ถูกต้อง/หมดอายุ (`INVALID_TOKEN`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            noToken:
+              summary: ไม่ได้แนบ token
+              value:
+                error:
+                  code: NO_TOKEN
+                  message: กรุณาเข้าสู่ระบบก่อนใช้งาน
+            invalidToken:
+              summary: token ไม่ถูกต้องหรือหมดอายุ
+              value:
+                error:
+                  code: INVALID_TOKEN
+                  message: Token ไม่ถูกต้องหรือหมดอายุ
+    StudentNotFound:
+      description: ไม่พบข้อมูลนิสิตตามรหัสที่ระบุ
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: NOT_FOUND
+              message: ไม่พบข้อมูลนิสิต
+    PayloadTooLarge:
+      description: body ของคำขอมีขนาดเกิน 100 KB (ถูกจำกัดโดย `express.json`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INTERNAL_SERVER_ERROR
+              message: request entity too large
+    InternalError:
+      description: |
+        เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์ เช่น เชื่อมต่อฐานข้อมูลไม่ได้
+        หรือ endpoint แบบ POST ได้รับคำขอที่ไม่มี body JSON เลย (ไม่ส่ง `Content-Type: application/json`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INTERNAL_SERVER_ERROR
+              message: เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+            details:
+              type: array
+              description: รายละเอียดรายฟิลด์ (มีเมื่อ Zod ตรวจ body ไม่ผ่าน เช่น POST /api/v1/students)
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                    example: passportNumber
+                  message:
+                    type: string
+                    example: ต้องระบุ passportNumber สำหรับสาขานานาชาติ
+    Credentials:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: student@example.com
+        password:
+          type: string
+          format: password
+          example: password123
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        email:
+          type: string
+          format: email
+          example: student@example.com
+        role:
+          type: string
+          enum: [student, admin]
+          example: student
+    TokenPayload:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          properties:
+            iat:
+              type: integer
+              description: เวลาที่ออก token (Unix time)
+            exp:
+              type: integer
+              description: เวลาที่ token หมดอายุ (Unix time)
+    Student:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: สมชาย ใจดี
+        major:
+          type: string
+          example: วิทยาการคอมพิวเตอร์
+        email:
+          type: string
+          format: email
+          example: somchai@example.com
+        created_at:
+          type: string
+          format: date-time
+    StudentInput:
+      type: object
+      required: [name, major, email]
+      properties:
+        name:
+          type: string
+          example: สมชาย ใจดี
+        major:
+          type: string
+          example: วิทยาการคอมพิวเตอร์
+        email:
+          type: string
+          format: email
+          example: somchai@example.com
+        passportNumber:
+          type: string
+          description: |
+            บังคับเมื่อ `major` ขึ้นต้นด้วย `International` (เช่น `International Business`)
+            ใช้ตรวจสอบข้อมูลเท่านั้น ไม่ถูกบันทึกลงตาราง `students`
+          example: AA1234567
+    Course:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        course_name:
+          type: string
+          example: การเขียนโปรแกรมเบื้องต้น
+        credit:
+          type: integer
+          example: 3
+        seat_available:
+          type: integer
+          example: 30
+    EnrollmentInput:
+      type: object
+      required: [courseId]
+      properties:
+        courseId:
+          type: integer
+          description: รหัสรายวิชาที่ต้องการลงทะเบียน
+          example: 1
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: สำเร็จ
+    StudentResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: สำเร็จ
+        data:
+          $ref: '#/components/schemas/Student'
+    StudentListResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: สำเร็จ
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Student'
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+              example: 1
+            limit:
+              type: integer
+              example: 10
+            total:
+              type: integer
+              example: 2
+            totalPages:
+              type: integer
+              example: 1
+    CourseListResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: สำเร็จ
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Course'
+    Enrichment:
+      type: object
+      required: [source, available, note]
+      properties:
+        source:
+          type: string
+          enum: [external, fallback]
+          description: "`external` = ได้ข้อมูลจากบริการภายนอก, `fallback` = บริการภายนอกล้มเหลว"
+        available:
+          type: boolean
+          description: true เมื่อ `source` เป็น `external`
+        note:
+          type: string
+          description: ชื่อ todo จากบริการภายนอก หรือข้อความแจ้งผู้ใช้เมื่อเป็น fallback
+    EnrichmentResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            studentId:
+              type: string
+              example: "1"
+            enrichment:
+              $ref: '#/components/schemas/Enrichment'
+    V2StudentListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Student'
+        count:
+          type: integer
+          example: 2

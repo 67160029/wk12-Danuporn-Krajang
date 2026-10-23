@@ -1,0 +1,77 @@
+{
+  "info": {
+    "name": "Student API - Rate Limit Attack (wk12)",
+    "description": "จำลอง Brute-force ที่ POST /api/v1/auth/login ใช้กับ Collection Runner: Iterations 20, Delay 0 ms (หรือ npm run test:ratelimit)\nต้องรีสตาร์ตเซิร์ฟเวอร์ก่อนรันทุกครั้ง (MemoryStore เริ่มนับใหม่) และห้ามตั้ง AUTH_RATE_LIMIT_MAX หรือ NODE_ENV=test",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "POST Login (brute-force)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"attacker@example.com\",\n  \"password\": \"wrong-password-{{$randomInt}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const n = pm.info.iteration + 1; // request ที่เท่าไรของรอบนี้ (เริ่มที่ 1)",
+              "",
+              "if (n <= 5) {",
+              "  pm.test(`Request #${n} ยังอยู่ในโควตา (200 หรือ 401)`, function () {",
+              "    pm.expect([200, 401]).to.include(pm.response.code);",
+              "  });",
+              "} else {",
+              "  pm.test(`Request #${n} เกินโควตา ต้องได้ 429`, function () {",
+              "    pm.response.to.have.status(429);",
+              "  });",
+              "",
+              "  pm.test(`Request #${n} body เป็น TOO_MANY_REQUESTS`, function () {",
+              "    pm.expect(pm.response.json().error.code).to.eql(\"TOO_MANY_REQUESTS\");",
+              "  });",
+              "",
+              "  pm.test(`Request #${n} มี header RateLimit (draft-7) และ remaining=0`, function () {",
+              "    const h = pm.response.headers.get(\"RateLimit\");",
+              "    pm.expect(h, \"header RateLimit\").to.be.a(\"string\");",
+              "    pm.expect(h).to.include(\"limit=5\");",
+              "    pm.expect(h).to.include(\"remaining=0\");",
+              "    pm.expect(h).to.include(\"reset=\");",
+              "  });",
+              "}"
+            ]
+          }
+        }
+      ],
+      "response": []
+    }
+  ]
+}
